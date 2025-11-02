@@ -3,6 +3,8 @@ from app.schemas.telex import TelexMessage
 from app.services.country_service import country_summary_with_fact
 from app.services.telex_client import send_message
 from app.services.scheduler_service import subscribe, unsubscribe
+from app.services.llm_client import cultural_fact
+
 
 router = APIRouter()
 
@@ -71,3 +73,17 @@ async def telex_webhook(payload: TelexMessage, background_tasks: BackgroundTasks
 @router.get("/health")
 async def health():
     return {"ok": True}
+
+
+@router.get("/llm-fact")
+async def llm_fact(country: str):
+    """
+    Quick LLM health check.
+    Example:
+      GET /v1/llm-fact?country=Japan
+    """
+    c = (country or "").strip()
+    if not c:
+        raise HTTPException(status_code=400, detail="Query param 'country' is required")
+    fact = await cultural_fact(c)
+    return {"country": c, "fact": fact}
