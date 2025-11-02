@@ -1,7 +1,0 @@
-FastAPI
-uvicorn
-pydantic
-httpx
-python-dotenv
-transformers
-torch

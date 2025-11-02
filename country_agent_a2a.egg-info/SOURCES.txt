@@ -1,7 +1,0 @@
-pyproject.toml
-app/infrastructure/models.py
-country_agent_a2a.egg-info/PKG-INFO
-country_agent_a2a.egg-info/SOURCES.txt
-country_agent_a2a.egg-info/dependency_links.txt
-country_agent_a2a.egg-info/requires.txt
-country_agent_a2a.egg-info/top_level.txt

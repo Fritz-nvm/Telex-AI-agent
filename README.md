@@ -1,6 +1,6 @@
 # FastAPI Country LLM
 
-This project is a FastAPI application that integrates a large language model (LLM) to provide facts and cultural information about different countries. 
+This project is a FastAPI application that integrates a large language model (LLM) to provide facts and cultural information about different countries.
 
 ## Features
 
@@ -13,6 +13,7 @@ This project is a FastAPI application that integrates a large language model (LL
 ```
 fastapi-country-llm
 ├── app
+
 │   ├── main.py                # Entry point of the FastAPI application
 │   ├── api                    # API related files
 │   │   ├── __init__.py
@@ -44,12 +45,14 @@ fastapi-country-llm
 ## Installation
 
 1. Clone the repository:
+
    ```
    git clone https://github.com/yourusername/fastapi-country-llm.git
    cd fastapi-country-llm
    ```
 
 2. Create a virtual environment and activate it:
+
    ```
    python -m venv venv
    source venv/bin/activate  # On Windows use `venv\Scripts\activate`
