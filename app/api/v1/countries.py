@@ -193,58 +193,33 @@ async def push_to_telex(
 ) -> bool:
     """
     Push final result to Telex webhook.
-    Match the exact structure from successful crypto agent response.
+    Structure based on successful weather agent webhook response.
     """
     headers = {
         "Authorization": f"Bearer {push_config.token}",
         "Content-Type": "application/json",
     }
 
-    # Build user message for history (from original request)
-    user_message = {
-        "kind": "message",
-        "role": "user",
-        "parts": [
-            {
-                "kind": "text",
-                "text": original_msg.parts[0].text,
-                "data": None,
-                "file_url": None,
-            }
-        ],
-        "messageId": original_msg.messageId,
-        "taskId": None,
-        "metadata": original_msg.metadata if original_msg.metadata else None,
-    }
-
-    # Build agent message matching crypto agent structure
-    agent_message = {
-        "kind": "message",
-        "role": "agent",
-        "parts": [
-            {
-                "kind": "text",
-                "text": agent_msg.parts[0].text,
-                "data": None,
-                "file_url": None,
-            }
-        ],
+    # Build message matching the exact successful structure
+    message_dict = {
         "messageId": agent_msg.messageId,
-        "taskId": None,  # Set to None like crypto agent
-        "metadata": None,
+        "role": "agent",
+        "parts": [{"kind": "text", "text": agent_msg.parts[0].text}],
+        "kind": "message",
+        "taskId": task_id,
     }
 
-    # Build result matching crypto agent structure
+    # Build result matching successful webhook structure
     result_dict = {
         "id": task_id,
         "contextId": context_id,
         "status": {
             "state": "completed",
-            "timestamp": datetime.utcnow().isoformat(),
-            "message": agent_message,
+            "timestamp": datetime.utcnow().isoformat() + "+00:00",  # Add timezone
+            "message": message_dict,
         },
         "artifacts": [],
-        "history": [user_message, agent_message],  # Include both messages
+        "history": [],
         "kind": "task",
     }
 
@@ -253,11 +228,9 @@ async def push_to_telex(
 
     print(f"[PUSH] Pushing to: {push_config.url}")
     print(f"[PUSH] Task ID: {task_id}")
+    print(f"[PUSH] Context ID: {context_id}")
     print(f"[PUSH] Message preview: {agent_msg.parts[0].text[:100]}...")
-    print(
-        f"[PUSH] Payload structure: jsonrpc={payload['jsonrpc']}, has_result={bool(payload.get('result'))}, has_error={payload.get('error') is not None}"
-    )
-    print(f"[PUSH] History length: {len(result_dict['history'])}")
+    print(f"[PUSH] Full payload:\n{json.dumps(payload, indent=2)}")
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
