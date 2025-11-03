@@ -191,19 +191,42 @@ async def push_to_telex(
     agent_msg: TelexMessage,
     task_id: str,
     context_id: str,
+    original_msg: TelexMessage,
 ) -> bool:
-    """Push final result to Telex webhook - simplified format for webhook consumption."""
+    """
+    Push final result to Telex webhook.
+    Based on Telex's expected webhook format.
+    """
     headers = {
         "Authorization": f"Bearer {push_config.token}",
         "Content-Type": "application/json",
     }
 
-    # Telex webhook expects just the message at top level, not full JSON-RPC response
-    payload = {"message": agent_msg.model_dump(exclude_none=True)}
+    # Build message with all required fields
+    message_dict = {
+        "kind": "message",
+        "role": "agent",
+        "parts": [{"kind": "text", "text": agent_msg.parts[0].text}],
+        "messageId": agent_msg.messageId,
+        "taskId": task_id,
+    }
+
+    # Include metadata from original message
+    if original_msg.metadata:
+        message_dict["metadata"] = original_msg.metadata
+
+    # Telex webhook payload structure
+    payload = {
+        "message": message_dict,
+        "taskId": task_id,
+        "contextId": context_id,
+        "status": "completed",
+    }
 
     print(f"[PUSH] Pushing to: {push_config.url}")
+    print(f"[PUSH] Task ID: {task_id}")
     print(f"[PUSH] Message preview: {agent_msg.parts[0].text[:100]}...")
-    print(f"[PUSH] Payload structure: {json.dumps(payload, indent=2)[:500]}...")
+    print(f"[PUSH] Full payload:\n{json.dumps(payload, indent=2)}")
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -215,6 +238,7 @@ async def push_to_telex(
     except httpx.HTTPStatusError as e:
         print(f"[PUSH] ❌ HTTP Error {e.response.status_code}")
         print(f"[PUSH] Response body: {e.response.text}")
+        print(f"[PUSH] Sent payload:\n{json.dumps(payload, indent=2)}")
         return False
     except httpx.TimeoutException:
         print(f"[PUSH] ❌ Timeout pushing to Telex webhook")
