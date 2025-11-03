@@ -1,12 +1,11 @@
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 from uuid import uuid4
 from datetime import datetime
 import re
 import json
 import asyncio
-
 
 from app.services.llm_client import cultural_fact, country_details
 
@@ -68,6 +67,89 @@ def _as_list(v) -> List[str]:
     if isinstance(v, dict):
         return [str(x) for x in v.values() if x]
     return []
+
+
+# --- New country extraction helpers ---
+
+MULTI_WORD_COUNTRIES = {
+    "south africa",
+    "saudi arabia",
+    "new zealand",
+    "united kingdom",
+    "united states",
+    "costa rica",
+    "czech republic",
+    "dominican republic",
+    "ivory coast",
+    "cote d’ivoire",
+    "côte d’ivoire",
+    "papua new guinea",
+    "trinidad and tobago",
+    "bosnia and herzegovina",
+    "north macedonia",
+    "united arab emirates",
+    "sri lanka",
+    "south korea",
+    "north korea",
+    "hong kong",
+    "sierra leone",
+    "vatican city",
+    "el salvador",
+}
+
+
+def _clean_text(t: str) -> str:
+    # Drop braces payloads and HTML tags that sometimes leak in
+    t = re.sub(r"[{}]", " ", t or "")
+    t = re.sub(r"<[^>]+>", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _extract_country_from_text(t: str) -> str:
+    """
+    Heuristics:
+    1) Explicit phrases: 'tell me about X', 'about X', 'fact about X'
+    2) Else, pick the last country-like mention; prefer known multi-word names.
+    """
+    s = _clean_text(t).lower()
+
+    # 1) Explicit phrase capture
+    patterns = [
+        r"(?:tell me about|fact about|about)\s+([a-z][a-z\s'’\-]+)$",
+        r"(?:tell me about|fact about|about)\s+([a-z][a-z\s'’\-]+)[\.\!\?]",
+    ]
+    for pat in patterns:
+        m = re.search(pat, s)
+        if m:
+            cand = m.group(1).strip(" .!?,;:")
+            return cand.title()
+
+    # 2) Token scan; choose the last plausible country mention
+    tokens = re.findall(r"[a-z][a-z'’\-]+", s)
+    if not tokens:
+        return ""
+
+    # Try last two-token window first (handles 'south africa', etc.)
+    if len(tokens) >= 2:
+        last2 = f"{tokens[-2]} {tokens[-1]}"
+        if last2 in MULTI_WORD_COUNTRIES:
+            return last2.title()
+
+    # Scan for any multi-word match ending nearest the end
+    joined = " ".join(tokens)
+    last_hit: Tuple[int, str] | None = None
+    for mw in MULTI_WORD_COUNTRIES:
+        idx = joined.rfind(mw)
+        if idx != -1 and (last_hit is None or idx > last_hit[0]):
+            last_hit = (idx, mw)
+    if last_hit:
+        return last_hit[1].title()
+
+    # Fallback: last single token (e.g., "Kenya", "Japan")
+    return tokens[-1].title()
+
+
+# --- End extraction helpers ---
 
 
 def _normalize_country_input(text: str) -> str:
@@ -141,15 +223,16 @@ def format_details_and_fact(details: Dict[str, Any] | None, fact: str) -> str:
 
 
 async def country_summary_with_fact(country: str) -> str:
-    normalized = _normalize_country_input(country)
-    details = await country_details(normalized)
-    fact = await cultural_fact(normalized)
+    # NEW: robust extraction for the chosen country from noisy text
+    chosen = _extract_country_from_text(country)
+    if not chosen:
+        return "Please specify a country (e.g., 'tell me about Japan')."
+    details = await country_details(chosen)
+    fact = await cultural_fact(chosen)
     return format_details_and_fact(details, fact)
 
 
 # A2A: JSON-RPC endpoint (use in Telex workflow generic A2A node)
-
-
 @router.post("/a2a/country")
 async def a2a_country(request: Request):
     try:
@@ -288,9 +371,6 @@ async def a2a_country(request: Request):
                 "data": {"details": str(e)},
             },
         }
-
-
-#
 
 
 # A2A: simple HTTP endpoints (use in HTTP/A2A skill if preferred)
