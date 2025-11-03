@@ -193,56 +193,44 @@ async def push_to_telex(
 ) -> bool:
     """
     Push final result to Telex webhook.
-    Structure based on successful weather agent webhook response.
+    CORRECTED: Send simple message structure, not JSON-RPC response.
     """
     headers = {
         "Authorization": f"Bearer {push_config.token}",
         "Content-Type": "application/json",
     }
 
-    # Build message matching the exact successful structure
-    message_dict = {
-        "messageId": agent_msg.messageId,
-        "role": "agent",
-        "parts": [{"kind": "text", "text": agent_msg.parts[0].text}],
-        "kind": "message",
-        "taskId": task_id,
+    # Build the SIMPLE message structure that Telex webhook expects
+    # This is the key fix - don't wrap in JSON-RPC format
+    payload = {
+        "message": {
+            "messageId": agent_msg.messageId,
+            "role": "agent",
+            "parts": [{"kind": "text", "text": agent_msg.parts[0].text}],
+            "kind": "message",
+            "taskId": task_id,
+        }
     }
-
-    # Build result matching successful webhook structure
-    result_dict = {
-        "id": task_id,
-        "contextId": context_id,
-        "status": {
-            "state": "completed",
-            "timestamp": datetime.utcnow().isoformat() + "+00:00",  # Add timezone
-            "message": message_dict,
-        },
-        "artifacts": [],
-        "history": [],
-        "kind": "task",
-    }
-
-    # Create JSON-RPC response
-    payload = {"jsonrpc": "2.0", "id": task_id, "result": result_dict, "error": None}
 
     print(f"[PUSH] Pushing to: {push_config.url}")
     print(f"[PUSH] Task ID: {task_id}")
-    print(f"[PUSH] Context ID: {context_id}")
     print(f"[PUSH] Message preview: {agent_msg.parts[0].text[:100]}...")
-    print(f"[PUSH] Full payload:\n{json.dumps(payload, indent=2)}")
+    print(f"[PUSH] Webhook payload:\n{json.dumps(payload, indent=2)}")
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(push_config.url, headers=headers, json=payload)
-            response.raise_for_status()
-            print(f"[PUSH] ✅ Success! Status: {response.status_code}")
-            print(f"[PUSH] Response: {response.text}")
-            return True
-    except httpx.HTTPStatusError as e:
-        print(f"[PUSH] ❌ HTTP Error {e.response.status_code}")
-        print(f"[PUSH] Response body: {e.response.text}")
-        return False
+
+            print(f"[PUSH] Response status: {response.status_code}")
+            print(f"[PUSH] Response body: {response.text}")
+
+            if response.status_code == 200:
+                print(f"[PUSH] ✅ Success! Webhook accepted")
+                return True
+            else:
+                print(f"[PUSH] ❌ Webhook rejected with status {response.status_code}")
+                return False
+
     except httpx.TimeoutException:
         print(f"[PUSH] ❌ Timeout pushing to Telex webhook")
         return False
@@ -256,7 +244,6 @@ async def process_and_push(
     task_id: str,
     context_id: str,
     push_config: PushNotificationConfig,
-    original_msg: TelexMessage,
 ):
     """
     Background task to process request and push result to Telex.
@@ -295,9 +282,7 @@ async def process_and_push(
     agent_msg = _make_agent_message(task_id, result_text)
 
     # Push to Telex webhook - FIXED: pass original_msg
-    success = await push_to_telex(
-        push_config, agent_msg, task_id, context_id, original_msg
-    )
+    success = await push_to_telex(push_config, agent_msg, task_id, context_id)
 
     if success:
         print(f"[PUSH] ✅ Completed successfully for task_id={task_id}")
@@ -357,7 +342,11 @@ async def a2a_country(request: Request):
     # Parse request
     try:
         body = await request.json()
+        print(
+            f"[A2A/COUNTRY] Received request body: {json.dumps(body, indent=2)[:500]}..."
+        )
     except json.JSONDecodeError as e:
+        print(f"[A2A/COUNTRY] JSON decode error: {e}")
         return JSONResponse(
             status_code=400,
             content={
@@ -378,15 +367,16 @@ async def a2a_country(request: Request):
         rpc_request = JSONRPCRequest(**body)
     except ValidationError as e:
         print(f"[A2A/COUNTRY] Validation error: {e}")
+        print(f"[A2A/COUNTRY] Validation errors detail: {e.errors()}")
         return JSONResponse(
-            status_code=400,
+            status_code=200,  # Changed from 400 to 200 for JSON-RPC errors
             content={
                 "jsonrpc": "2.0",
                 "id": body.get("id"),
                 "error": {
                     "code": -32600,
                     "message": "Invalid Request",
-                    "data": {"details": str(e)},
+                    "data": {"details": str(e), "errors": e.errors()},
                 },
             },
         )
@@ -405,6 +395,7 @@ async def a2a_country(request: Request):
     except ValidationError as e:
         print(f"[A2A/COUNTRY] Config validation error: {e}")
         return JSONResponse(
+            status_code=200,  # JSON-RPC errors should return 200
             content={
                 "jsonrpc": "2.0",
                 "id": req_id,
@@ -413,7 +404,7 @@ async def a2a_country(request: Request):
                     "message": "Invalid configuration",
                     "data": {"details": str(e)},
                 },
-            }
+            },
         )
 
     blocking = config.blocking
@@ -431,6 +422,7 @@ async def a2a_country(request: Request):
             try:
                 msg = TelexMessage(**msg_data)
             except ValidationError as e:
+                print(f"[A2A/COUNTRY] Message validation error: {e}")
                 raise ValueError(f"Invalid message format: {e}")
 
             # Extract user text from message parts
@@ -456,7 +448,7 @@ async def a2a_country(request: Request):
 
                 print(f"[A2A/COUNTRY] Starting async task for task_id={task_id}")
 
-                # Start background processing (fire and forget)
+                # Start background processing (fire and forget) - pass original msg
                 asyncio.create_task(
                     process_and_push(user_text, task_id, context_id, push_config, msg)
                 )
@@ -479,7 +471,9 @@ async def a2a_country(request: Request):
 
                 response = JSONRPCResponse(jsonrpc="2.0", id=req_id, result=task_result)
 
-                return JSONResponse(content=response.model_dump(exclude_none=True))
+                return JSONResponse(
+                    status_code=200, content=response.model_dump(exclude_none=True)
+                )
 
             # BLOCKING MODE: Process and return result
             print(f"[A2A/COUNTRY] Processing in blocking mode")
@@ -519,9 +513,12 @@ async def a2a_country(request: Request):
 
             response = JSONRPCResponse(jsonrpc="2.0", id=req_id, result=task_result)
 
-            return JSONResponse(content=response.model_dump(exclude_none=True))
+            return JSONResponse(
+                status_code=200, content=response.model_dump(exclude_none=True)
+            )
 
         return JSONResponse(
+            status_code=200,  # JSON-RPC method not found should be 200
             content={
                 "jsonrpc": "2.0",
                 "id": req_id,
@@ -530,12 +527,13 @@ async def a2a_country(request: Request):
                     "message": f"Method not found: {method}",
                     "data": {"supported_methods": ["message/send"]},
                 },
-            }
+            },
         )
 
     except ValueError as ve:
         print(f"[A2A/COUNTRY] Validation error: {ve}")
         return JSONResponse(
+            status_code=200,  # JSON-RPC errors should be 200
             content={
                 "jsonrpc": "2.0",
                 "id": req_id,
@@ -544,12 +542,12 @@ async def a2a_country(request: Request):
                     "message": "Invalid params",
                     "data": {"details": str(ve)},
                 },
-            }
+            },
         )
     except Exception as e:
         print(f"[A2A/COUNTRY] Internal error: {traceback.format_exc()}")
         return JSONResponse(
-            status_code=500,
+            status_code=200,  # Even internal errors should be 200 for JSON-RPC
             content={
                 "jsonrpc": "2.0",
                 "id": req_id,
