@@ -291,8 +291,10 @@ async def process_and_push(
     # Create validated agent message
     agent_msg = _make_agent_message(task_id, result_text)
 
-    # Push to Telex webhook with task_id and context_id
-    success = await push_to_telex(push_config, agent_msg, task_id, context_id)
+    # Push to Telex webhook - FIXED: pass original_msg
+    success = await push_to_telex(
+        push_config, agent_msg, task_id, context_id, original_msg
+    )
 
     if success:
         print(f"[PUSH] ✅ Completed successfully for task_id={task_id}")
