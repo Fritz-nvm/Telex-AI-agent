@@ -59,26 +59,41 @@ def _clean_text(t: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
+# ...existing code...
+
+
 def extract_country(text: str) -> str:
     """
     Extract country name from potentially noisy input.
     Prioritizes explicit phrases like "tell me about X".
+    Returns the LAST country mentioned in the text.
     """
     s = _clean_text(text).lower()
 
-    # Try explicit patterns first
+    # Try explicit patterns first (these take precedence)
     patterns = [
         r"(?:tell me about|fact about|about|information on)\s+([a-z][a-z\s''\-]+?)(?:\s+tell|\s+fact|\s+information|\s*$)",
         r"(?:tell me about|fact about|about|information on)\s+([a-z][a-z\s''\-]+)[\.\!\?]",
     ]
 
+    # Find ALL matches with explicit patterns
+    explicit_matches = []
     for pat in patterns:
-        m = re.search(pat, s)
-        if m:
+        for m in re.finditer(pat, s):
             candidate = m.group(1).strip(" .!?,;:")
-            return candidate.title()
+            explicit_matches.append(candidate)
 
-    # Token-based extraction
+    # If we found explicit mentions, return the LAST one
+    if explicit_matches:
+        last_match = explicit_matches[-1]
+        # Check if it's a multi-word country
+        if last_match in MULTI_WORD_COUNTRIES:
+            return last_match.title()
+        # Otherwise take first word from the match
+        first_word = last_match.split()[0]
+        return first_word.title()
+
+    # Token-based extraction - scan from RIGHT to LEFT
     tokens = re.findall(r"[a-z][a-z''\-]+", s)
     if not tokens:
         return ""
@@ -89,19 +104,13 @@ def extract_country(text: str) -> str:
         if last_two in MULTI_WORD_COUNTRIES:
             return last_two.title()
 
-    # Scan for any multi-word match
-    joined = " ".join(tokens)
-    last_hit = None
+    # Scan backwards for any multi-word match
+    for i in range(len(tokens) - 2, -1, -1):
+        two_words = f"{tokens[i]} {tokens[i+1]}"
+        if two_words in MULTI_WORD_COUNTRIES:
+            return two_words.title()
 
-    for mw in MULTI_WORD_COUNTRIES:
-        idx = joined.rfind(mw)
-        if idx != -1 and (last_hit is None or idx > last_hit[0]):
-            last_hit = (idx, mw)
-
-    if last_hit:
-        return last_hit[1].title()
-
-    # Fallback to last token
+    # Return last token as country
     return tokens[-1].title()
 
 
@@ -174,20 +183,50 @@ def _make_agent_message(task_id: str, text: str) -> TelexMessage:
     )
 
 
+# ...existing imports...
+
+
 async def push_to_telex(
-    push_config: PushNotificationConfig, agent_msg: TelexMessage
+    push_config: PushNotificationConfig,
+    agent_msg: TelexMessage,
+    task_id: str,
+    context_id: str,
 ) -> bool:
-    """Push final result to Telex webhook (for non-blocking mode) with validated schemas."""
+    """Push final result to Telex webhook as a complete JSON-RPC response."""
     headers = {
         "Authorization": f"Bearer {push_config.token}",
         "Content-Type": "application/json",
     }
 
-    # Convert Pydantic model to dict for JSON serialization
-    payload = {"message": agent_msg.model_dump(exclude_none=True)}
+    # Create complete task result with completed status
+    task_status = TaskStatus(
+        state="completed",
+        timestamp=datetime.utcnow().isoformat(),
+        message=agent_msg,
+    )
+
+    task_result = TaskResult(
+        id=task_id,
+        contextId=context_id,
+        status=task_status,
+        artifacts=[],
+        history=[agent_msg],  # Only include agent message in push
+        kind="task",
+    )
+
+    # Create JSON-RPC response (Telex webhook expects this format)
+    rpc_response = JSONRPCResponse(
+        jsonrpc="2.0",
+        id=task_id,  # Use task_id as the RPC id
+        result=task_result,
+    )
+
+    # Convert to dict
+    payload = rpc_response.model_dump(exclude_none=True)
 
     print(f"[PUSH] Pushing to: {push_config.url}")
     print(f"[PUSH] Message preview: {agent_msg.parts[0].text[:100]}...")
+    print(f"[PUSH] Payload structure: {json.dumps(payload, indent=2)[:300]}...")
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -251,13 +290,16 @@ async def process_and_push(
     # Create validated agent message
     agent_msg = _make_agent_message(task_id, result_text)
 
-    # Push to Telex webhook
-    success = await push_to_telex(push_config, agent_msg)
+    # Push to Telex webhook with task_id and context_id
+    success = await push_to_telex(push_config, agent_msg, task_id, context_id)
 
     if success:
         print(f"[PUSH] ✅ Completed successfully for task_id={task_id}")
     else:
         print(f"[PUSH] ❌ Failed to deliver result for task_id={task_id}")
+
+
+# ...rest of the code stays the same...
 
 
 @router.post("/a2a/message", response_class=PlainTextResponse)
