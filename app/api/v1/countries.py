@@ -192,27 +192,41 @@ async def push_to_telex(
 ) -> bool:
     """
     Push final result to Telex webhook.
-    CORRECTED: Send simple message structure, not JSON-RPC response.
+    CORRECTED: Send full JSON-RPC response structure that Telex webhook expects.
     """
     headers = {
         "Authorization": f"Bearer {push_config.token}",
         "Content-Type": "application/json",
     }
 
-    # Build the SIMPLE message structure that Telex webhook expects
-    # This is the key fix - don't wrap in JSON-RPC format
+    # Build the COMPLETE JSON-RPC response structure
     payload = {
-        "message": {
-            "messageId": agent_msg.messageId,
-            "role": "agent",
-            "parts": [{"kind": "text", "text": agent_msg.parts[0].text}],
-            "kind": "message",
-            "taskId": task_id,
-        }
+        "jsonrpc": "2.0",
+        "id": task_id,  # Use task_id as the JSON-RPC id
+        "result": {
+            "id": task_id,
+            "contextId": context_id,
+            "status": {
+                "state": "completed",
+                "timestamp": datetime.utcnow().isoformat() + "+00:00",
+                "message": {
+                    "messageId": agent_msg.messageId,
+                    "role": "agent",
+                    "parts": [{"kind": "text", "text": agent_msg.parts[0].text}],
+                    "kind": "message",
+                    "taskId": task_id,
+                },
+            },
+            "artifacts": [],
+            "history": [],
+            "kind": "task",
+        },
+        "error": None,
     }
 
     print(f"[PUSH] Pushing to: {push_config.url}")
     print(f"[PUSH] Task ID: {task_id}")
+    print(f"[PUSH] Context ID: {context_id}")
     print(f"[PUSH] Message preview: {agent_msg.parts[0].text[:100]}...")
     print(f"[PUSH] Webhook payload:\n{json.dumps(payload, indent=2)}")
 
