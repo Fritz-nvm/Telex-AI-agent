@@ -194,45 +194,38 @@ async def push_to_telex(
     original_msg: TelexMessage,
 ) -> bool:
     """
-    Push final result to Telex webhook as a complete JSON-RPC response.
-    Telex webhook expects the same format as the initial response.
+    Push final result to Telex webhook.
+    Telex webhook expects a simplified payload with message at root level.
     """
     headers = {
         "Authorization": f"Bearer {push_config.token}",
         "Content-Type": "application/json",
     }
 
-    # Build the complete JSON-RPC response structure
-    # This matches what Telex expects from the webhook
-    task_status = TaskStatus(
-        state="completed",
-        timestamp=datetime.utcnow().isoformat(),
-        message=agent_msg,
-    )
+    # Ensure message has all required fields matching the input format
+    message_payload = {
+        "kind": "message",
+        "role": "agent",
+        "parts": [{"kind": "text", "text": agent_msg.parts[0].text, "metadata": None}],
+        "messageId": agent_msg.messageId,
+        "contextId": context_id,  # Include contextId in message
+        "taskId": task_id,  # Include taskId in message
+    }
 
-    task_result = TaskResult(
-        id=task_id,
-        contextId=context_id,
-        status=task_status,
-        artifacts=[],
-        history=[agent_msg],  # Include the agent message in history
-        kind="task",
-    )
+    # Add metadata if present in original message
+    if original_msg.metadata:
+        message_payload["metadata"] = original_msg.metadata
+    else:
+        message_payload["metadata"] = None
 
-    # Create JSON-RPC response
-    rpc_response = JSONRPCResponse(
-        jsonrpc="2.0",
-        id=task_id,  # Use task_id as the RPC id
-        result=task_result,
-    )
-
-    # Convert to dict
-    payload = rpc_response.model_dump(exclude_none=True)
+    # Webhook payload structure
+    payload = {"message": message_payload}
 
     print(f"[PUSH] Pushing to: {push_config.url}")
     print(f"[PUSH] Task ID: {task_id}")
+    print(f"[PUSH] Context ID: {context_id}")
     print(f"[PUSH] Message preview: {agent_msg.parts[0].text[:100]}...")
-    print(f"[PUSH] Full payload:\n{json.dumps(payload, indent=2)[:1000]}...")
+    print(f"[PUSH] Full payload:\n{json.dumps(payload, indent=2)}")
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
