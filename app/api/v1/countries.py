@@ -189,7 +189,6 @@ async def push_to_telex(
     agent_msg: TelexMessage,
     task_id: str,
     context_id: str,
-    original_msg: TelexMessage,
 ) -> bool:
     """
     Push final result to Telex webhook.
