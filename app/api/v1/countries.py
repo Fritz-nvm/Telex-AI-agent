@@ -192,54 +192,45 @@ async def push_to_telex(
     original_msg: TelexMessage,
 ) -> bool:
     """
-    Push final result to Telex webhook as a complete JSON-RPC response.
-    The webhook endpoint expects the same JSON-RPC format as the initial response.
+    Push final result to Telex webhook.
+    Structure based on successful weather agent webhook response.
     """
     headers = {
         "Authorization": f"Bearer {push_config.token}",
         "Content-Type": "application/json",
     }
 
-    # Build the message with proper structure
+    # Build message matching the exact successful structure
     message_dict = {
-        "kind": "message",
-        "role": "agent",
-        "parts": [{"kind": "text", "text": agent_msg.parts[0].text, "metadata": None}],
         "messageId": agent_msg.messageId,
-        "contextId": context_id,
+        "role": "agent",
+        "parts": [{"kind": "text", "text": agent_msg.parts[0].text}],
+        "kind": "message",
         "taskId": task_id,
     }
 
-    # Add metadata from original message
-    if original_msg.metadata:
-        message_dict["metadata"] = original_msg.metadata
-    else:
-        message_dict["metadata"] = None
-
-    # Create the complete JSON-RPC response structure
-    # This should match the format of the initial "running" response
-    payload = {
-        "jsonrpc": "2.0",
+    # Build result matching successful webhook structure
+    result_dict = {
         "id": task_id,
-        "result": {
-            "id": task_id,
-            "contextId": context_id,
-            "status": {
-                "state": "completed",
-                "timestamp": datetime.utcnow().isoformat(),
-                "message": message_dict,
-            },
-            "artifacts": [],
-            "history": [message_dict],
-            "kind": "task",
+        "contextId": context_id,
+        "status": {
+            "state": "completed",
+            "timestamp": datetime.utcnow().isoformat() + "+00:00",  # Add timezone
+            "message": message_dict,
         },
+        "artifacts": [],
+        "history": [],
+        "kind": "task",
     }
+
+    # Create JSON-RPC response
+    payload = {"jsonrpc": "2.0", "id": task_id, "result": result_dict, "error": None}
 
     print(f"[PUSH] Pushing to: {push_config.url}")
     print(f"[PUSH] Task ID: {task_id}")
     print(f"[PUSH] Context ID: {context_id}")
     print(f"[PUSH] Message preview: {agent_msg.parts[0].text[:100]}...")
-    print(f"[PUSH] Full payload:\n{json.dumps(payload, indent=2)[:1000]}...")
+    print(f"[PUSH] Full payload:\n{json.dumps(payload, indent=2)}")
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
