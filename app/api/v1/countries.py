@@ -192,41 +192,18 @@ async def push_to_telex(
     task_id: str,
     context_id: str,
 ) -> bool:
-    """Push final result to Telex webhook as a complete JSON-RPC response."""
+    """Push final result to Telex webhook - simplified format for webhook consumption."""
     headers = {
         "Authorization": f"Bearer {push_config.token}",
         "Content-Type": "application/json",
     }
 
-    # Create complete task result with completed status
-    task_status = TaskStatus(
-        state="completed",
-        timestamp=datetime.utcnow().isoformat(),
-        message=agent_msg,
-    )
-
-    task_result = TaskResult(
-        id=task_id,
-        contextId=context_id,
-        status=task_status,
-        artifacts=[],
-        history=[agent_msg],  # Only include agent message in push
-        kind="task",
-    )
-
-    # Create JSON-RPC response (Telex webhook expects this format)
-    rpc_response = JSONRPCResponse(
-        jsonrpc="2.0",
-        id=task_id,  # Use task_id as the RPC id
-        result=task_result,
-    )
-
-    # Convert to dict
-    payload = rpc_response.model_dump(exclude_none=True)
+    # Telex webhook expects just the message at top level, not full JSON-RPC response
+    payload = {"message": agent_msg.model_dump(exclude_none=True)}
 
     print(f"[PUSH] Pushing to: {push_config.url}")
     print(f"[PUSH] Message preview: {agent_msg.parts[0].text[:100]}...")
-    print(f"[PUSH] Payload structure: {json.dumps(payload, indent=2)[:300]}...")
+    print(f"[PUSH] Payload structure: {json.dumps(payload, indent=2)[:500]}...")
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
