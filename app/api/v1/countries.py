@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 from uuid import uuid4
 from datetime import datetime
 from app.services.country_service import country_summary_with_fact
-from app.services.llm_client import cultural_fact
+from app.services.llm_client import cultural_fact, country_details  # added
 
 router = APIRouter()
 
@@ -214,6 +214,25 @@ async def a2a_json(body: Dict[str, Any]):
         }
     result = await country_summary_with_fact(intent["country"])
     return {"messages": [{"type": "message", "text": result}]}
+
+
+# New: structured details via Groq (debug/helper)
+@router.post("/a2a/details")
+async def a2a_details(body: Dict[str, Any]):
+    txt = (body.get("text") or "").strip()
+    if not txt:
+        return {"error": "Query param 'text' is required."}
+    det = await country_details(txt)
+    if not det:
+        return {"details": None, "message": "LLM unavailable or country not resolved."}
+    return {"details": det}
+
+
+# Quick test endpoints
+@router.get("/country")
+async def country(name: str):
+    text = await country_summary_with_fact(name)
+    return {"text": text}
 
 
 # LLM health check
