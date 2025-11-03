@@ -173,7 +173,7 @@ async def country_summary_with_fact(country_name: str) -> str:
 
 
 def _make_agent_message(task_id: str, text: str) -> TelexMessage:
-    """Create a valid Telex agent message using Pydantic schema."""
+    """Create a valid Telex agent message matching successful agents."""
     return TelexMessage(
         kind="message",
         role="agent",
@@ -183,7 +183,6 @@ def _make_agent_message(task_id: str, text: str) -> TelexMessage:
     )
 
 
-# ...existing imports...
 async def push_to_telex(
     push_config: PushNotificationConfig,
     agent_msg: TelexMessage,
@@ -192,14 +191,14 @@ async def push_to_telex(
 ) -> bool:
     """
     Push final result to Telex webhook.
-    FIXED: Handle 202 status as success and fix validation issues.
+    UPDATED: Match EXACT structure of successful weather agent.
     """
     headers = {
         "Authorization": f"Bearer {push_config.token}",
         "Content-Type": "application/json",
     }
 
-    # Build the COMPLETE JSON-RPC response structure
+    # EXACT structure from successful weather agent
     payload = {
         "jsonrpc": "2.0",
         "id": task_id,
@@ -208,16 +207,19 @@ async def push_to_telex(
             "contextId": context_id,
             "status": {
                 "state": "completed",
-                "timestamp": datetime.utcnow().isoformat() + "+00:00",
+                "timestamp": datetime.utcnow().isoformat()
+                + "+00:00",  # Match timestamp format
                 "message": {
                     "messageId": agent_msg.messageId,
                     "role": "agent",
                     "parts": [{"kind": "text", "text": agent_msg.parts[0].text}],
                     "kind": "message",
                     "taskId": task_id,
+                    # NO metadata field
+                    # NO contextId field in message
                 },
             },
-            "artifacts": [],
+            "artifacts": [],  # Keep this array even if empty
             "history": [],
             "kind": "task",
         },
@@ -226,8 +228,8 @@ async def push_to_telex(
 
     print(f"[PUSH] Pushing to: {push_config.url}")
     print(f"[PUSH] Task ID: {task_id}")
-    print(f"[PUSH] Context ID: {context_id}")
     print(f"[PUSH] Message preview: {agent_msg.parts[0].text[:100]}...")
+    print(f"[PUSH] Webhook payload:\n{json.dumps(payload, indent=2)}")
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -236,7 +238,6 @@ async def push_to_telex(
             print(f"[PUSH] Response status: {response.status_code}")
             print(f"[PUSH] Response body: {response.text}")
 
-            # FIX: 202 means "Accepted" - this is SUCCESS!
             if response.status_code in [200, 202]:
                 print(
                     f"[PUSH] ✅ Success! Webhook accepted with status {response.status_code}"
@@ -246,9 +247,6 @@ async def push_to_telex(
                 print(f"[PUSH] ❌ Webhook rejected with status {response.status_code}")
                 return False
 
-    except httpx.TimeoutException:
-        print(f"[PUSH] ❌ Timeout pushing to Telex webhook")
-        return False
     except Exception as e:
         print(f"[PUSH] ❌ Push failed: {traceback.format_exc()}")
         return False
