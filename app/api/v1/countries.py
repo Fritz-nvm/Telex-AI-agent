@@ -449,7 +449,7 @@ async def a2a_country(request: Request):
 
                 # Start background processing (fire and forget) - pass original msg
                 asyncio.create_task(
-                    process_and_push(user_text, task_id, context_id, push_config, msg)
+                    process_and_push(user_text, task_id, context_id, push_config)
                 )
 
                 # Create and validate response
