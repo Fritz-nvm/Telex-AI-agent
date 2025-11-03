@@ -4,6 +4,9 @@ from typing import Any, Dict, List
 from uuid import uuid4
 from datetime import datetime
 import re
+import json
+import asyncio
+
 
 from app.services.llm_client import cultural_fact, country_details
 
@@ -145,6 +148,8 @@ async def country_summary_with_fact(country: str) -> str:
 
 
 # A2A: JSON-RPC endpoint (use in Telex workflow generic A2A node)
+
+
 @router.post("/a2a/country")
 async def a2a_country(request: Request):
     try:
@@ -158,6 +163,15 @@ async def a2a_country(request: Request):
                 "error": {"code": -32700, "message": "Parse error"},
             },
         )
+
+    # Log minimal info to Railway logs
+    try:
+        print(
+            "[A2A] incoming:",
+            json.dumps({"id": body.get("id"), "method": body.get("method")}),
+        )
+    except Exception:
+        pass
 
     req_id = body.get("id")
     if body.get("jsonrpc") != "2.0" or req_id is None:
@@ -173,6 +187,18 @@ async def a2a_country(request: Request):
     method = body.get("method")
     params = body.get("params", {}) or {}
 
+    async def handle_text(user_text: str) -> str:
+        intent = parse_intent(user_text)
+        if intent["cmd"] != "on_demand":
+            return "Use chat commands: /subscribe HH:MM [country] or /unsubscribe"
+        # Make sure we don’t exceed Telex node timeout
+        try:
+            return await asyncio.wait_for(
+                country_summary_with_fact(intent["country"]), timeout=20
+            )
+        except asyncio.TimeoutError:
+            return "Sorry, that took too long. Please try again."
+
     try:
         if method == "message/send":
             msg = params.get("message") or {}
@@ -181,12 +207,7 @@ async def a2a_country(request: Request):
             if not user_text:
                 raise ValueError("No text content found in message parts.")
 
-            intent = parse_intent(user_text)
-            if intent["cmd"] != "on_demand":
-                text = "Use chat commands: /subscribe HH:MM [country] or /unsubscribe"
-            else:
-                text = await country_summary_with_fact(intent["country"])
-
+            text = await handle_text(user_text)
             context_id = params.get("contextId") or str(uuid4())
             task_id = msg.get("taskId") or str(uuid4())
             agent_msg = _make_agent_message(task_id, text)
@@ -217,12 +238,7 @@ async def a2a_country(request: Request):
             if not user_text:
                 raise ValueError("No text content found in message parts.")
 
-            intent = parse_intent(user_text)
-            if intent["cmd"] != "on_demand":
-                text = "Use chat commands: /subscribe HH:MM [country] or /unsubscribe"
-            else:
-                text = await country_summary_with_fact(intent["country"])
-
+            text = await handle_text(user_text)
             context_id = params.get("contextId") or str(uuid4())
             task_id = params.get("taskId") or str(uuid4())
             agent_msg = _make_agent_message(task_id, text)
@@ -262,6 +278,7 @@ async def a2a_country(request: Request):
             },
         }
     except Exception as e:
+        print("[A2A] error:", repr(e))
         return {
             "jsonrpc": "2.0",
             "id": req_id,
@@ -271,6 +288,9 @@ async def a2a_country(request: Request):
                 "data": {"details": str(e)},
             },
         }
+
+
+#
 
 
 # A2A: simple HTTP endpoints (use in HTTP/A2A skill if preferred)
