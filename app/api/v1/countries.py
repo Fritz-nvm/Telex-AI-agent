@@ -192,7 +192,7 @@ async def push_to_telex(
 ) -> bool:
     """
     Push final result to Telex webhook.
-    CORRECTED: Send full JSON-RPC response structure that Telex webhook expects.
+    FIXED: Handle 202 status as success and fix validation issues.
     """
     headers = {
         "Authorization": f"Bearer {push_config.token}",
@@ -202,7 +202,7 @@ async def push_to_telex(
     # Build the COMPLETE JSON-RPC response structure
     payload = {
         "jsonrpc": "2.0",
-        "id": task_id,  # Use task_id as the JSON-RPC id
+        "id": task_id,
         "result": {
             "id": task_id,
             "contextId": context_id,
@@ -228,7 +228,6 @@ async def push_to_telex(
     print(f"[PUSH] Task ID: {task_id}")
     print(f"[PUSH] Context ID: {context_id}")
     print(f"[PUSH] Message preview: {agent_msg.parts[0].text[:100]}...")
-    print(f"[PUSH] Webhook payload:\n{json.dumps(payload, indent=2)}")
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -237,8 +236,11 @@ async def push_to_telex(
             print(f"[PUSH] Response status: {response.status_code}")
             print(f"[PUSH] Response body: {response.text}")
 
-            if response.status_code == 200:
-                print(f"[PUSH] ✅ Success! Webhook accepted")
+            # FIX: 202 means "Accepted" - this is SUCCESS!
+            if response.status_code in [200, 202]:
+                print(
+                    f"[PUSH] ✅ Success! Webhook accepted with status {response.status_code}"
+                )
                 return True
             else:
                 print(f"[PUSH] ❌ Webhook rejected with status {response.status_code}")
