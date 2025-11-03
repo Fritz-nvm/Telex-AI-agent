@@ -3,8 +3,9 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from typing import Any, Dict, List
 from uuid import uuid4
 from datetime import datetime
-from app.services.country_service import country_summary_with_fact
-from app.services.llm_client import cultural_fact, country_details  # added
+import re
+
+from app.services.llm_client import cultural_fact, country_details
 
 router = APIRouter()
 
@@ -52,6 +53,95 @@ def _make_agent_message(task_id: str, text: str) -> Dict[str, Any]:
         "messageId": str(uuid4()),
         "taskId": task_id,
     }
+
+
+def _as_list(v) -> List[str]:
+    if v is None:
+        return []
+    if isinstance(v, list):
+        return [str(x) for x in v if x]
+    if isinstance(v, str):
+        return [v] if v else []
+    if isinstance(v, dict):
+        return [str(x) for x in v.values() if x]
+    return []
+
+
+def _normalize_country_input(text: str) -> str:
+    """
+    Handles noisy inputs like 'kenya japan japan ...'.
+    If any token repeats, pick the most frequent token; else keep original text
+    to allow multi-word countries (e.g., 'United States').
+    """
+    t = (text or "").strip()
+    if not t:
+        return t
+    tokens = re.findall(r"[A-Za-z][A-Za-z\-'’]+", t)
+    if not tokens:
+        return t
+    freq: Dict[str, int] = {}
+    for tok in tokens:
+        k = tok.strip("'’").lower()
+        freq[k] = freq.get(k, 0) + 1
+    if not freq:
+        return t
+    most_common = max(freq.values())
+    if most_common > 1:
+        candidate = max(freq.items(), key=lambda kv: kv[1])[0]
+        return candidate[:1].upper() + candidate[1:]
+    return t
+
+
+def format_details_and_fact(details: Dict[str, Any] | None, fact: str) -> str:
+    if not details:
+        return fact
+
+    name = details.get("name") or "Unknown country"
+    capital = ", ".join(_as_list(details.get("capital"))) or "N/A"
+    region = details.get("region") or "N/A"
+    subregion = details.get("subregion") or "N/A"
+    pop = details.get("population_estimate")
+    population_s = (
+        f"{pop:,}"
+        if isinstance(pop, int)
+        else ("N/A" if pop in (None, "", "null") else str(pop))
+    )
+    languages_s = ", ".join(_as_list(details.get("languages"))) or "N/A"
+    currencies_s = ", ".join(_as_list(details.get("currencies"))) or "N/A"
+    timezones_s = ", ".join(_as_list(details.get("timezones"))) or "N/A"
+    cca2 = details.get("cca2") or ""
+    cca3 = details.get("cca3") or ""
+
+    fact_line = fact
+    low = fact.lower()
+    if (
+        ("invalid api key" in low)
+        or ("llm not available" in low)
+        or low.startswith("server not configured")
+        or low.startswith("sorry")
+    ):
+        fact_line = "N/A (LLM unavailable)"
+
+    code = (cca2 or cca3 or "").strip()
+    code_disp = f" [{code}]" if code else ""
+
+    return (
+        f"{name}{code_disp}\n"
+        f"- Capital: {capital}\n"
+        f"- Region: {region} ({subregion})\n"
+        f"- Population: {population_s}\n"
+        f"- Languages: {languages_s}\n"
+        f"- Currencies: {currencies_s}\n"
+        f"- Timezones: {timezones_s}\n"
+        f"\nCulture fact: {fact_line}"
+    )
+
+
+async def country_summary_with_fact(country: str) -> str:
+    normalized = _normalize_country_input(country)
+    details = await country_details(normalized)
+    fact = await cultural_fact(normalized)
+    return format_details_and_fact(details, fact)
 
 
 # A2A: JSON-RPC endpoint (use in Telex workflow generic A2A node)
