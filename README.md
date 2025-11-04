@@ -40,8 +40,8 @@ A Python-based A2A (Agent-to-Agent) service that provides country information wi
 1. **Clone the repository**
 
    ```bash
-   git clone https://github.com/yourusername/telex-country-agent.git
-   cd telex-country-agent
+   git clone https://github.com/Fritz-nvm/Telex-AI-agent
+   cd Telex-AI-agent
    ```
 
 2. **Install dependencies**
