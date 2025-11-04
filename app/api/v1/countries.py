@@ -190,115 +190,6 @@ def _make_user_message(user_text: str, original_message_id: str) -> dict:
     }
 
 
-async def push_to_telex_simple(
-    push_config: PushNotificationConfig,
-    agent_msg: dict,
-    task_id: str,
-    context_id: str,
-    user_msg: dict,
-) -> bool:
-    """
-    Simple webhook push with the exact structure that works.
-    """
-    headers = {
-        "Authorization": f"Bearer {push_config.token}",
-        "Content-Type": "application/json",
-    }
-
-    # Use the EXACT structure from the working example
-    payload = {
-        "jsonrpc": "2.0",
-        "id": task_id,
-        "result": {
-            "id": task_id,
-            "contextId": context_id,
-            "status": {
-                "state": "completed",
-                "timestamp": datetime.utcnow().isoformat(),
-                "message": agent_msg,
-            },
-            "artifacts": [],
-            "history": [
-                user_msg,
-                agent_msg,
-            ],  # Include full history like working example
-            "kind": "task",
-        },
-    }
-
-    print(f"[WEBHOOK] Pushing to: {push_config.url}")
-    print(f"[WEBHOOK] Task ID: {task_id}")
-
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(push_config.url, headers=headers, json=payload)
-
-            print(f"[WEBHOOK] Response status: {response.status_code}")
-
-            if response.status_code in [200, 202]:
-                print(f"[WEBHOOK] ✅ Success! Status: {response.status_code}")
-                return True
-            else:
-                print(f"[WEBHOOK] ❌ Failed with status: {response.status_code}")
-                print(f"[WEBHOOK] Response: {response.text}")
-                return False
-
-    except Exception as e:
-        print(f"[WEBHOOK] ❌ Exception: {traceback.format_exc()}")
-        return False
-
-
-async def process_country_request(
-    user_text: str,
-    task_id: str,
-    context_id: str,
-    push_config: PushNotificationConfig,
-    original_message_id: str,
-):
-    """
-    Background task to process country request and push result to Telex webhook.
-    """
-    print(f"[BACKGROUND] Starting processing for task_id={task_id}")
-
-    try:
-        # Extract country and process
-        country = extract_country(user_text)
-        print(f"[BACKGROUND] Extracted country: '{country}'")
-
-        if not country:
-            result_text = "Please specify a country (e.g., 'tell me about Kenya')."
-        else:
-            try:
-                result_text = await asyncio.wait_for(
-                    country_summary_with_fact(country), timeout=20.0
-                )
-            except asyncio.TimeoutError:
-                result_text = (
-                    f"Sorry, gathering information about {country} took too long."
-                )
-            except Exception as e:
-                print(f"[BACKGROUND] Processing error: {traceback.format_exc()}")
-                result_text = f"Sorry, I encountered an error processing {country}."
-
-    except Exception as e:
-        print(f"[BACKGROUND] Error: {traceback.format_exc()}")
-        result_text = f"Sorry, I encountered an error: {str(e)}"
-
-    # Create messages
-    agent_msg = _make_agent_message(task_id, result_text)
-    user_msg = _make_user_message(user_text, original_message_id)
-
-    # Push result to Telex webhook
-    success = await push_to_telex_simple(
-        push_config, agent_msg, task_id, context_id, user_msg
-    )
-
-    if success:
-        print(f"[BACKGROUND] ✅ Completed successfully for task_id={task_id}")
-    else:
-        print(f"[BACKGROUND] ❌ Failed to deliver result for task_id={task_id}")
-
-
 @router.post("/a2a/message", response_class=PlainTextResponse)
 async def a2a_text(body: Dict[str, Any], request: Request):
     """
@@ -340,8 +231,7 @@ async def a2a_text(body: Dict[str, Any], request: Request):
 @router.post("/a2a/country_info")
 async def a2a_country(request: Request):
     """
-    JSON-RPC A2A endpoint - handles both blocking and non-blocking modes.
-    Simplified to use dicts instead of Pydantic models for better compatibility.
+    JSON-RPC A2A endpoint - FORCE BLOCKING MODE to avoid validation issues.
     """
     trace_id = request.headers.get("X-Telex-Trace-Id", "unknown")
 
@@ -363,14 +253,8 @@ async def a2a_country(request: Request):
     method = body.get("method")
     params = body.get("params", {})
 
-    # Get configuration with proper defaults
-    config = params.get("configuration", {})
-    blocking = config.get("blocking", False)  # Default to false if not specified
-    push_config_data = config.get("pushNotificationConfig")
-
-    print(
-        f"[A2A/COUNTRY] blocking={blocking}, has_push_config={push_config_data is not None}"
-    )
+    # FORCE BLOCKING MODE to avoid validation issues
+    blocking = True  # Always use blocking mode
 
     try:
         if method == "message/send":
@@ -390,57 +274,9 @@ async def a2a_country(request: Request):
             context_id = params.get("contextId") or str(uuid4())
             original_message_id = msg_data.get("messageId")
 
-            print(f"[A2A/COUNTRY] Processing: '{user_text[:50]}...'")
+            print(f"[A2A/COUNTRY] Processing in BLOCKING mode: '{user_text[:50]}...'")
 
-            # NON-BLOCKING MODE: Return immediately and process in background
-            if not blocking:
-                if not push_config_data:
-                    raise ValueError(
-                        "pushNotificationConfig required for non-blocking mode"
-                    )
-
-                # Validate push config
-                try:
-                    push_config = PushNotificationConfig(**push_config_data)
-                except ValidationError as e:
-                    raise ValueError(f"Invalid push notification config: {e}")
-
-                print(
-                    f"[A2A/COUNTRY] Starting non-blocking processing for task_id={task_id}"
-                )
-
-                # Start background processing
-                asyncio.create_task(
-                    process_country_request(
-                        user_text, task_id, context_id, push_config, original_message_id
-                    )
-                )
-
-                # Return immediate response with "running" state
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "result": {
-                        "id": task_id,
-                        "contextId": context_id,
-                        "status": {
-                            "state": "running",
-                            "timestamp": datetime.utcnow().isoformat(),
-                        },
-                        "artifacts": [],
-                        "history": [],
-                        "kind": "task",
-                    },
-                }
-
-                print(
-                    f"[A2A/COUNTRY] ✅ Returned running state for non-blocking request"
-                )
-                return JSONResponse(status_code=200, content=response)
-
-            # BLOCKING MODE: Process and return result immediately
-            print(f"[A2A/COUNTRY] Processing in blocking mode")
-
+            # Process immediately (BLOCKING)
             country = extract_country(user_text)
             print(f"[A2A/COUNTRY] Extracted country: '{country}'")
 
@@ -457,10 +293,22 @@ async def a2a_country(request: Request):
                     )
 
             # Create messages
-            agent_msg = _make_agent_message(task_id, result_text)
-            user_msg = _make_user_message(user_text, original_message_id)
+            agent_msg = {
+                "kind": "message",
+                "role": "agent",
+                "parts": [{"kind": "text", "text": result_text}],
+                "messageId": str(uuid4()),
+                "taskId": task_id,
+            }
 
-            # Build response for blocking mode
+            user_msg = {
+                "kind": "message",
+                "role": "user",
+                "parts": msg_data.get("parts", []),
+                "messageId": original_message_id,
+            }
+
+            # Build COMPLETED response (blocking mode)
             response = {
                 "jsonrpc": "2.0",
                 "id": req_id,
@@ -468,20 +316,17 @@ async def a2a_country(request: Request):
                     "id": task_id,
                     "contextId": context_id,
                     "status": {
-                        "state": "completed",
+                        "state": "completed",  # Use 'completed' not 'running'
                         "timestamp": datetime.utcnow().isoformat(),
                         "message": agent_msg,
                     },
                     "artifacts": [],
-                    "history": [
-                        user_msg,
-                        agent_msg,
-                    ],  # Include full history like working example
+                    "history": [user_msg, agent_msg],
                     "kind": "task",
                 },
             }
 
-            print(f"[A2A/COUNTRY] ✅ Returned completed response for '{country}'")
+            print(f"[A2A/COUNTRY] ✅ Returned COMPLETED response for '{country}'")
             return JSONResponse(status_code=200, content=response)
 
         # Method not found
