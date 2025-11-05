@@ -308,7 +308,7 @@ async def a2a_country(request: Request):
                 "messageId": original_message_id,
             }
 
-            # Build COMPLETED response (blocking mode)
+            # Build COMPLETED response (blocking mode) WITH ARTIFACTS
             response = {
                 "jsonrpc": "2.0",
                 "id": req_id,
@@ -320,13 +320,35 @@ async def a2a_country(request: Request):
                         "timestamp": datetime.utcnow().isoformat(),
                         "message": agent_msg,
                     },
-                    "artifacts": [],
+                    "artifacts": [
+                        {
+                            "artifactId": str(uuid4()),
+                            "name": "countryInformation",
+                            "parts": [
+                                {
+                                    "kind": "data",
+                                    "data": {
+                                        "country": country,
+                                        "response": result_text,
+                                        "timestamp": datetime.utcnow().isoformat(),
+                                    },
+                                }
+                            ],
+                        },
+                        {
+                            "artifactId": str(uuid4()),
+                            "name": "countrySummary",
+                            "parts": [{"kind": "text", "text": result_text}],
+                        },
+                    ],
                     "history": [user_msg, agent_msg],
                     "kind": "task",
                 },
             }
 
-            print(f"[A2A/COUNTRY] ✅ Returned COMPLETED response for '{country}'")
+            print(
+                f"[A2A/COUNTRY] ✅ Returned COMPLETED response for '{country}' with artifacts"
+            )
             return JSONResponse(status_code=200, content=response)
 
         # Method not found
